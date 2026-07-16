@@ -116,10 +116,9 @@ def main() -> None:
     theme.inject(st)
     state.init()
 
-    # Bring the background stack up on first load: the stream server that feeds
-    # the live panel, and the thread that scores captured flows. Both are cached
-    # resources, so this builds them once per process rather than once per rerun.
-    state.get_livefile()
+    # Bring the scoring thread up on first load, so detections are logged even
+    # when nobody is looking at the Live Monitoring page. Cached, so this builds
+    # it once per process rather than once per rerun.
     state.get_pipeline()
 
     state.seed_demo()

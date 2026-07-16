@@ -13,13 +13,6 @@ font = "sans serif"
 [server]
 headless = true
 
-# Serves the "static" folder next to app.py at /app/static/... on Streamlit's
-# own port and origin. The live panel and its snapshot file are delivered this
-# way, which is what lets the panel work identically on a laptop and on a
-# deployed host. Files are read from disk on every request, so the snapshot the
-# pipeline rewrites is always the one the browser gets.
-enableStaticServing = true
-
 # The file watcher is off deliberately.
 #
 # On Windows with CPython 3.13, tearing down a session (browser tab closed,

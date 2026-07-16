@@ -1,34 +1,38 @@
 """
 Live Monitoring page.
 
-This page does not refresh. That is the point.
+Everything here is rendered by Streamlit. There is no iframe and no side
+channel, because neither survives deployment: a second port is unreachable from
+a host, and Streamlit Community Cloud does not serve this app's static folder,
+so a panel delivered that way never loads.
 
-Everything that changes as traffic arrives lives in the panel, which Streamlit
-serves from the app's static folder and which is embedded here in an iframe
-whose src never changes. Streamlit renders that iframe once and then leaves it
-alone, so there is no timer, no rerun, and nothing being replaced. The panel
-polls its own snapshot file and draws each flow as it is scored.
+So the live view is built the same way as the rest of the dashboard, and the
+cost of that is honest: a fragment reruns on a timer, and a rerun replaces
+elements. The work here is to make that replacement as cheap as possible rather
+than to pretend it does not happen.
 
-What is left in Streamlit is the part that only changes when the user changes
-it: the capture controls.
+  * One fragment, holding only what changes. The controls, the header and the
+    sidebar are outside it and are never touched by the timer.
+  * The radar is the in-page CSS radar, not a canvas in an iframe. An iframe
+    reloads on every rerun, which is a visible flash; an element is swapped in
+    place. Its sweep stays continuous across reruns through a negative
+    animation-delay computed from the server clock.
+  * The charts are inline SVG, not Plotly. Plotly rebuilds its JavaScript chart
+    on every render and is the heaviest thing on a timed page.
+  * Two seconds by default, and adjustable. Slower means less movement.
 
-The earlier design ran the whole page on a timer and re-rendered it every few
-seconds. Fragments narrowed the scope of that but not the mechanism; a rerun
-still replaces elements, and replacing elements is what the eye reads as a
-blink. The only way to stop it is to stop re-rendering, which is what this does.
+Scoring still happens on the pipeline thread, not here, so detections keep being
+logged while you are on another page and the render path stays light.
 """
 
 import time
-from urllib.parse import urlencode
 
 import streamlit as st
 
-from ..components import cards
+from ..components import cards, charts, radar
 from ..core import state
 from ..core.capture import NfstreamSource, PcapSource, SimulatedSource
 from ..theme import COLORS, html
-
-PANEL_HEIGHT = 900
 
 
 def _controls() -> None:
@@ -36,7 +40,7 @@ def _controls() -> None:
     capture = state.get_capture()
     settings = state.settings()
 
-    columns = st.columns([1.4, 1, 1, 1, 1.2])
+    columns = st.columns([1.3, 1, 1, 1, 1.2])
 
     with columns[0]:
         options = ["Simulated"]
@@ -49,7 +53,8 @@ def _controls() -> None:
             options,
             help=(
                 "Simulated needs no drivers. Live interface requires nfstream "
-                "plus Npcap and an Administrator terminal."
+                "plus Npcap and an Administrator terminal, and is not available "
+                "on a deployed app."
             ),
         )
 
@@ -71,9 +76,12 @@ def _controls() -> None:
             )
 
     with columns[2]:
-        settings["sweep_period"] = st.number_input(
-            "Sweep (s)", 1.0, 10.0, float(settings["sweep_period"]), 0.5,
-            help="Seconds for one full rotation of the radar.",
+        settings["refresh_seconds"] = st.number_input(
+            "Refresh (s)", 1, 30, int(settings["refresh_seconds"]),
+            help=(
+                "How often the live panel redraws. Raising this makes the page "
+                "calmer; the radar sweep keeps animating either way."
+            ),
         )
 
     with columns[3]:
@@ -111,15 +119,93 @@ def _controls() -> None:
                 st.rerun()
 
 
+def _live_panel() -> None:
+    """
+    The only part that reruns on the timer.
+
+    Deliberately holds nothing but light markup: KPI cards, the CSS radar, the
+    flow table and two inline SVGs. No Plotly, no iframe, no component.
+    """
+    capture = state.get_capture()
+    settings = state.settings()
+    stats = state.stats()
+
+    cards.kpi_grid(
+        [
+            {
+                "label": "Total flows",
+                "value": f"{stats['total']:,}",
+                "color": COLORS["accent"],
+                "delta": "streaming" if capture.running else "capture stopped",
+            },
+            {
+                "label": "Malicious",
+                "value": f"{stats['malicious']:,}",
+                "color": COLORS["attack"],
+                "delta": f"{stats['rate']:.1f}% of traffic",
+            },
+            {
+                "label": "Normal",
+                "value": f"{stats['normal']:,}",
+                "color": COLORS["normal"],
+                "delta": "no action required",
+            },
+            {
+                "label": "Active alerts",
+                "value": f"{stats['alerts']:,}",
+                "color": COLORS["probe"],
+                "delta": f"conf \u2265 {settings['alert_threshold']:.2f}",
+            },
+        ]
+    )
+
+    left, right = st.columns([1.5, 1])
+
+    with left:
+        cards.section("Live traffic flows")
+        cards.flow_table(state.recent_flows(80), height=430)
+
+    with right:
+        cards.section("Threat radar")
+        blips = radar.build_blips(state.recent_flows(160))
+        radar.render(
+            blips,
+            height=340,
+            retention=settings["radar_retention"],
+            sweep_period=settings["sweep_period"],
+            scanning=capture.running,
+            show_benign=settings["show_benign_on_radar"],
+        )
+
+    st.markdown(html("<div style='height:0.5rem;'></div>"), unsafe_allow_html=True)
+
+    frame = state.flows_frame()
+    chart_left, chart_right = st.columns(2)
+
+    with chart_left:
+        cards.section("Threats over time")
+        st.markdown(html(charts.svg_sparkline(frame)), unsafe_allow_html=True)
+
+    with chart_right:
+        cards.section("Attack distribution")
+        counts = {}
+        if not frame.empty:
+            counts = (
+                frame[frame["prediction"] != "BENIGN"]["prediction"].value_counts().to_dict()
+            )
+        st.markdown(html(charts.svg_donut(counts)), unsafe_allow_html=True)
+
+    recent_alerts = state.alerts(1)
+    if recent_alerts:
+        cards.alert_bar(recent_alerts[0])
+
+
 def render() -> None:
     capture = state.get_capture()
     settings = state.settings()
 
-    # Starting these is what brings the page to life: the pipeline scores
-    # captured flows on a thread and republishes the snapshot the panel polls.
-    # Both are cached resources, so they are built once per process, not once
-    # per rerun.
-    livefile = state.get_livefile()
+    # The pipeline scores captured flows on its own thread. Cached, so this
+    # builds it once per process rather than once per rerun.
     pipeline = state.get_pipeline()
     pipeline.alert_threshold = settings["alert_threshold"]
 
@@ -132,7 +218,7 @@ def render() -> None:
 
     cards.page_header(
         "LIVE MONITORING",
-        "Streaming flow capture, extraction and classification",
+        "Real-time flow capture, extraction and classification",
         f'<span class="dot" style="--chip-color:{status_color};"></span>{status_text}',
     )
 
@@ -150,96 +236,12 @@ def render() -> None:
             "filled up. Lower the capture rate."
         )
 
-    if not capture.running:
-        st.caption(
-            "Capture is stopped. The panel below keeps polling and starts "
-            "drawing again as soon as you press Start; it does not need to be "
-            "reloaded."
-        )
+    # Only the fragment reruns, and only while capture is running. Passing
+    # run_every=None parks it, so a stopped dashboard does not spin the CPU.
+    interval = settings["refresh_seconds"] if capture.running else None
+    st.fragment(_live_panel, run_every=interval)()
 
-    # The query string carries the display settings. Changing one of these does
-    # change the src, so the panel reloads on that specific edit. That is the
-    # right trade: it happens when the user asks for it, not on a timer.
-    query = urlencode(
-        {
-            "retention": settings["radar_retention"],
-            "sweep": settings["sweep_period"],
-            "benign": "1" if settings["show_benign_on_radar"] else "0",
-            "threshold": settings["alert_threshold"],
-        }
+    st.caption(
+        f"{pipeline.scored:,} flows scored this session \u00b7 "
+        f"panel redraws every {settings['refresh_seconds']}s while capturing"
     )
-
-    # A relative URL on Streamlit's own origin and port. That is what makes the
-    # panel work unchanged on a deployed host, where a second port would not be
-    # reachable at all.
-    st.iframe(f"{livefile.panel_url}?{query}", height=PANEL_HEIGHT)
-
-    _panel_diagnostics(livefile, pipeline)
-
-
-def _panel_diagnostics(livefile, pipeline) -> None:
-    """
-    Report why the panel is or is not loading.
-
-    The panel depends on three things lining up: static serving switched on, the
-    files written, and Streamlit serving them at the expected path. When it
-    fails, all three look identical from the outside, which is why they are
-    printed here rather than left to be guessed at from the logs.
-    """
-    import os
-
-    enabled = st.get_option("server.enableStaticServing")
-
-    panel_ok = os.path.exists(livefile.panel_path)
-    live_ok = os.path.exists(livefile.live_path)
-    panel_size = os.path.getsize(livefile.panel_path) if panel_ok else 0
-    live_size = os.path.getsize(livefile.live_path) if live_ok else 0
-
-    if not enabled:
-        st.error(
-            "Static file serving is off, so the panel above cannot load. "
-            "Streamlit only creates the /app/static/ route when "
-            "`enableStaticServing = true` is set under `[server]` in the "
-            "`.streamlit/config.toml` at the **root of the repository**. "
-            "Check that the file is committed and that the option is in it."
-        )
-    elif not panel_ok:
-        st.error(
-            f"Static serving is on, but {livefile.panel_path} was not written. "
-            "The panel cannot load until it exists."
-        )
-
-    with st.expander("Panel diagnostics", expanded=not (enabled and panel_ok)):
-        st.markdown(
-            html(
-                f"""
-                <div style="font-family:var(--font-mono);font-size:0.78rem;
-                            line-height:1.9;color:{COLORS['text_secondary']};">
-                <b style="color:{COLORS['text']};">enableStaticServing</b>:
-                    <span style="color:{COLORS['normal'] if enabled else COLORS['attack']};">
-                    {enabled}</span><br>
-                <b style="color:{COLORS['text']};">static folder</b>: {livefile.static_dir}<br>
-                <b style="color:{COLORS['text']};">panel.html</b>:
-                    <span style="color:{COLORS['normal'] if panel_ok else COLORS['attack']};">
-                    {'present' if panel_ok else 'MISSING'}</span> ({panel_size:,} bytes)<br>
-                <b style="color:{COLORS['text']};">live.json</b>:
-                    <span style="color:{COLORS['normal'] if live_ok else COLORS['attack']};">
-                    {'present' if live_ok else 'MISSING'}</span> ({live_size:,} bytes)<br>
-                <b style="color:{COLORS['text']};">snapshots published</b>: {livefile.writes:,}<br>
-                <b style="color:{COLORS['text']};">flows scored</b>: {pipeline.scored:,}<br>
-                <b style="color:{COLORS['text']};">pipeline running</b>: {pipeline.running}
-                </div>
-                """
-            ),
-            unsafe_allow_html=True,
-        )
-
-        st.caption(
-            "Open these directly to test the route. Both should load; panel.html "
-            "renders the panel, live.json shows the current snapshot."
-        )
-        st.code("app/static/panel.html\napp/static/live.json", language=None)
-        st.markdown(
-            "[Open panel.html](app/static/panel.html) &nbsp;|&nbsp; "
-            "[Open live.json](app/static/live.json)"
-        )

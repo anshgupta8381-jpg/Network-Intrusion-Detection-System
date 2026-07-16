@@ -64,18 +64,15 @@ def render() -> None:
         columns = st.columns(2)
 
         with columns[0]:
-            st.markdown(
-                html(
-                    f"""
-                    <div style="font-size:0.8rem;color:{COLORS['text_secondary']};
-                                line-height:1.6;padding-bottom:0.8rem;">
-                        There is no refresh interval. The live panel holds an open
-                        stream and draws each flow as it is scored, so there is
-                        nothing to poll and nothing to re-render.
-                    </div>
-                    """
+            settings["refresh_seconds"] = st.number_input(
+                "Live panel refresh interval (seconds)",
+                1, 30, int(settings["refresh_seconds"]),
+                help=(
+                    "How often the live panel redraws. Only that panel reruns; "
+                    "the controls and the sidebar are left alone. Raising this "
+                    "makes the page calmer. The radar sweep animates in CSS and "
+                    "keeps moving between redraws either way."
                 ),
-                unsafe_allow_html=True,
             )
             settings["flows_per_second"] = st.number_input(
                 "Simulated flows per second",

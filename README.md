@@ -34,7 +34,6 @@ change.
 | Feature | Status |
 |---|---|
 | All seven screens | Working |
-| Streaming live panel, no reruns and no blink | Working |
 | Threat radar with live sweep and blips | Working |
 | Simulated traffic source | Working |
 | Background capture and scoring threads | Working |
@@ -70,48 +69,26 @@ feature order, pass through the same scaler and the same model. That is why the
 results table, the alert logic, the radar and the exports do not need to know
 where a row came from.
 
-### Real-time approach, and why the live panel is not a Streamlit page
+### Real-time approach
 
-Streamlit renders from the server: every rerun replaces the elements on the
-page. That is fine for a form and wrong for a live console, because replacing
-elements is exactly what the eye reads as a blink. There is no setting that
-makes it silent, and fragments narrow the scope of a rerun without changing the
-mechanism.
+    capture thread -> pipeline thread (scores) -> store -> SQLite
+                                               -> Live Monitoring reads the store
 
-So the live panel does not use Streamlit's render path at all:
+Scoring runs on a background thread rather than in the render path, so
+detections keep being logged while you are on another page or with no browser
+open. In the original design, scoring only happened when the Live Monitoring
+page happened to be rerunning, which quietly left holes in the log. Scored flows
+live in `core/store.py` at process level, because a background thread cannot
+touch session state.
 
-    capture thread -> pipeline thread (scores) -> static/live.json -> browser
-                                              -> store -> SQLite
+The live page redraws through `st.fragment(run_every=...)`, so only the panel
+reruns and the controls, header and sidebar are left alone. What is inside that
+fragment is deliberately cheap: the CSS radar, an HTML table and two inline
+SVGs. No Plotly, which rebuilds its JavaScript chart on every render, and no
+iframe, which reloads on every render.
 
-`core/livefile.py` writes two files into `nids/static/`, which Streamlit serves
-on its own port at `/app/static/`: the panel page, and a `live.json` snapshot the
-pipeline rewrites twice a second. Live Monitoring embeds the panel in an iframe
-whose src never changes, so Streamlit renders it once and then leaves it alone.
-The panel polls its own snapshot and appends each new flow itself. Nothing
-reruns, nothing is replaced, nothing blinks, and the radar animates at the
-browser's frame rate rather than stepping once per refresh.
-
-The snapshot is written to a temp file and renamed, so a poll landing mid-write
-reads the old file or the new one, never half of each.
-
-An earlier version pushed over Server-Sent Events from a server on its own port.
-That was better locally, instant instead of up to a second late, and undeployable:
-a browser resolves `127.0.0.1` to the viewer's own machine, and hosts expose only
-the one Streamlit port. Polling one file on the app's own origin works in both
-places, and the second of latency is invisible. The blink was never about how the
-data arrived; it was about Streamlit re-rendering the page.
-
-This is close to how real consoles work: a long-lived page, a server that
-pushes, and a client that mutates only what changed.
-
-Two consequences worth knowing:
-
-  * Scoring moved out of the render path onto a background thread, so detections
-    are logged continuously, including while you are on another page. In the old
-    design, scoring only happened when Live Monitoring happened to be rerunning,
-    which quietly left holes in the log.
-  * Scored flows live in `core/store.py` at process level rather than in session
-    state, because a background thread cannot touch session state.
+A rerun still replaces elements, and that is visible as some movement. Two
+smoother designs were built and both proved undeployable; see DEPLOY.md.
 
 The capture queue is bounded on purpose: if the pipeline falls behind, dropping
 the oldest flows beats growing memory without limit, and the drop count is shown
@@ -134,15 +111,13 @@ nids/
 │   ├── engine.py           model loading and inference, simulation fallback
 │   ├── capture.py          capture sources and the capture thread
 │   ├── pipeline.py         scoring thread: drain, predict, store, publish
-│   ├── livefile.py         writes static/panel.html and static/live.json
 │   ├── store.py            process-level flow buffer and alert feed
 │   ├── simulator.py        synthetic traffic generator
 │   ├── db.py               SQLite detection log
 │   └── state.py            cached resources and shared accessors
 │
 ├── components/
-│   ├── panel.py            the streaming live panel (canvas radar, table, charts)
-│   ├── radar.py            in-page CSS radar, used on Overview
+│   ├── radar.py            in-page CSS radar
 │   ├── cards.py            KPI cards, tables, alert feed
 │   └── charts.py           themed Plotly charts
 │
@@ -177,18 +152,15 @@ Every status also carries a **text label and a shape glyph**, never colour alone
 
 ### The radar
 
-There are two, because the two pages have different needs.
+Drawn as elements in the page, not on a canvas in an iframe, because an iframe
+reloads on every rerun and that is a visible flash.
 
-Live Monitoring uses the canvas radar inside the streaming panel. It never
-reruns, so it simply animates on requestAnimationFrame.
-
-Overview uses an in-page CSS radar (`components/radar.py`). That page does not
-auto-refresh, but it does re-render when the user interacts, and a fresh element
-would restart its animation from zero. A negative `animation-delay` computed from
-the server clock fixes that: an element rendered with `animation-delay: -1.2s`
-starts 1.2 seconds into its cycle, so the sweep carries on from where it was.
-Each blip's flash is delayed by its own bearing, so it lights up as the sweep
-crosses it, with no JavaScript involved.
+There is no JavaScript. The sweep and the per-blip flash are CSS animations, and
+they survive reruns through a negative `animation-delay` computed from the server
+clock: an element rendered with `animation-delay: -1.2s` starts 1.2 seconds into
+its cycle, so a fresh element picks the sweep up where the previous one left off
+instead of restarting at zero. Each blip's flash is delayed by its own bearing,
+so it lights up exactly as the sweep crosses it.
 
 - **Bearing** is a hash of the source address, so the same attacker returns to
   the same part of the scope every time. This is what makes it readable rather

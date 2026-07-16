@@ -291,3 +291,145 @@ def feature_importance(frame: pd.DataFrame, limit: int = 15, height: int = 420) 
     layout["yaxis"] = dict(layout["yaxis"], gridcolor="rgba(0,0,0,0)")
     figure.update_layout(**layout, height=height, showlegend=False)
     return figure
+
+
+# --------------------------------------------------------------------------
+# Inline SVG charts
+# --------------------------------------------------------------------------
+#
+# The live page draws its charts as SVG rather than with Plotly.
+#
+# Plotly mounts a JavaScript chart per figure and re-initialises it whenever
+# Streamlit re-renders the element. On a page that refreshes on a timer that
+# rebuild is the single heaviest thing on screen, and it reads as a flash. An
+# SVG is just markup: it is replaced in place, costs nothing to paint, and
+# matches how the radar on the same page is drawn.
+#
+# The trade is interactivity. These have no hover tooltips and no zoom. The
+# Detection Results and Overview pages keep the Plotly versions, which is where
+# someone would actually go to interrogate the numbers.
+
+
+def svg_sparkline(frame, height: int = 130, buckets: int = 30, seconds: int = 300) -> str:
+    """Threat count over the recent past, as a filled line."""
+    import time as _time
+
+    now = _time.time()
+    width = 100.0  # viewBox units; the SVG scales to its container
+    step = seconds / buckets
+
+    counts = [0] * buckets
+    if frame is not None and not frame.empty and "ts" in frame.columns:
+        threats = frame[frame["prediction"] != "BENIGN"]
+        for ts in threats["ts"]:
+            age = now - float(ts)
+            if 0 <= age < seconds:
+                index = buckets - 1 - int(age / step)
+                if 0 <= index < buckets:
+                    counts[index] += 1
+
+    peak = max(1, max(counts))
+
+    points = []
+    for i, value in enumerate(counts):
+        x = (i / (buckets - 1)) * width
+        y = height - 6 - (value / peak) * (height - 24)
+        points.append(f"{x:.2f},{y:.2f}")
+
+    line = " ".join(points)
+    area = f"0,{height} {line} {width},{height}"
+
+    return f"""
+<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none"
+     style="width:100%;height:{height}px;display:block;">
+  <polygon points="{area}" fill="rgba(255,92,108,0.14)" />
+  <polyline points="{line}" fill="none" stroke="{COLORS['attack']}"
+            stroke-width="1.5" vector-effect="non-scaling-stroke"
+            stroke-linejoin="round" />
+  <line x1="0" y1="{height - 1}" x2="{width}" y2="{height - 1}"
+        stroke="{COLORS['border']}" stroke-width="1" vector-effect="non-scaling-stroke" />
+</svg>
+<div style="display:flex;justify-content:space-between;
+            font-family:var(--font-mono);font-size:0.62rem;
+            color:{COLORS['text_muted']};margin-top:0.2rem;">
+  <span>peak {peak}</span><span>last {seconds // 60} min</span>
+</div>
+"""
+
+
+def svg_donut(counts: dict, size: int = 130) -> str:
+    """Attack distribution as a donut, with a legend beside it."""
+    import math
+
+    total = sum(counts.values())
+    if not total:
+        return (
+            f'<div style="height:{size}px;display:flex;align-items:center;'
+            f'justify-content:center;color:{COLORS["text_muted"]};'
+            f'font-family:var(--font-mono);font-size:0.76rem;">'
+            f"No attacks detected yet.</div>"
+        )
+
+    cx = cy = size / 2
+    outer = size / 2 - 6
+    inner = outer * 0.62
+
+    segments = []
+    angle = -math.pi / 2
+
+    for label, count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        sweep = (count / total) * math.pi * 2
+        end = angle + sweep
+        large = 1 if sweep > math.pi else 0
+
+        # A full circle cannot be drawn with one arc, so a single-class donut
+        # is drawn as two half circles instead.
+        if abs(sweep - math.pi * 2) < 1e-6:
+            segments.append(
+                f'<circle cx="{cx}" cy="{cy}" r="{(outer + inner) / 2:.2f}" '
+                f'fill="none" stroke="{class_color(label)}" '
+                f'stroke-width="{outer - inner:.2f}" />'
+            )
+            angle = end
+            continue
+
+        x0, y0 = cx + math.cos(angle) * outer, cy + math.sin(angle) * outer
+        x1, y1 = cx + math.cos(end) * outer, cy + math.sin(end) * outer
+        x2, y2 = cx + math.cos(end) * inner, cy + math.sin(end) * inner
+        x3, y3 = cx + math.cos(angle) * inner, cy + math.sin(angle) * inner
+
+        segments.append(
+            f'<path d="M {x0:.2f} {y0:.2f} '
+            f'A {outer:.2f} {outer:.2f} 0 {large} 1 {x1:.2f} {y1:.2f} '
+            f'L {x2:.2f} {y2:.2f} '
+            f'A {inner:.2f} {inner:.2f} 0 {large} 0 {x3:.2f} {y3:.2f} Z" '
+            f'fill="{class_color(label)}" stroke="{COLORS["base"]}" stroke-width="1.5" />'
+        )
+        angle = end
+
+    legend = []
+    for label, count in sorted(counts.items(), key=lambda kv: -kv[1])[:7]:
+        legend.append(
+            f'<div style="display:flex;align-items:center;gap:6px;'
+            f'font-family:var(--font-mono);font-size:0.66rem;'
+            f'color:{COLORS["text"]};line-height:1.7;">'
+            f'<i style="width:7px;height:7px;border-radius:50%;'
+            f'background:{class_color(label)};box-shadow:0 0 6px {class_color(label)};'
+            f'flex-shrink:0;"></i>{label} <span style="color:{COLORS["text_muted"]};">'
+            f"{count}</span></div>"
+        )
+
+    return f"""
+<div style="display:flex;align-items:center;gap:1rem;">
+  <svg viewBox="0 0 {size} {size}" style="width:{size}px;height:{size}px;flex-shrink:0;">
+    {''.join(segments)}
+    <text x="{cx}" y="{cy - 3}" text-anchor="middle" dominant-baseline="middle"
+          fill="{COLORS['text']}" font-family="Orbitron, sans-serif"
+          font-size="15" font-weight="900">{total}</text>
+    <text x="{cx}" y="{cy + 11}" text-anchor="middle" dominant-baseline="middle"
+          fill="{COLORS['text_muted']}" font-family="JetBrains Mono, monospace"
+          font-size="7">THREATS</text>
+  </svg>
+  <div>{''.join(legend)}</div>
+</div>
+"""

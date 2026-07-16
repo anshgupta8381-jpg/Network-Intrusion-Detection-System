@@ -26,6 +26,7 @@ from .store import BUFFER_SIZE, get_store
 
 DEFAULT_SETTINGS = {
     "interface": "Simulated",
+    "refresh_seconds": 2,
     "alert_threshold": 0.70,
     "flows_per_second": 6.0,
     "attack_bias": 1.0,
@@ -49,28 +50,6 @@ def get_capture() -> CaptureController:
 
 
 @st.cache_resource
-def get_livefile():
-    """
-    The writer that feeds the live panel.
-
-    Writes panel.html once and rewrites live.json as flows are scored. Both live
-    in the app's static folder, which Streamlit serves on its own port, so this
-    works the same locally and on a deployed host.
-    """
-    import os
-
-    from ..components.panel import build
-    from .livefile import get_livefile as _get
-
-    # Streamlit serves "static" from beside the entrypoint script, so the folder
-    # is resolved from this package rather than from the working directory.
-    static_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static"
-    )
-    return _get(static_dir=static_dir, panel_html=build())
-
-
-@st.cache_resource
 def get_pipeline() -> Pipeline:
     """
     The scoring thread.
@@ -79,7 +58,6 @@ def get_pipeline() -> Pipeline:
     keep being logged even when nobody is looking at the Live Monitoring page.
     """
     pipeline = Pipeline(get_capture(), get_engine(), get_store())
-    pipeline.livefile = get_livefile()
     pipeline.start()
     return pipeline
 

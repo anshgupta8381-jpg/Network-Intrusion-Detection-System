@@ -8,12 +8,26 @@ out of `requirements.txt`. On a deployed app the capture source dropdown offers
 Simulated only. That is the honest behaviour, and it is also what you want for a
 client demo: simulated traffic fills the radar, the alerts and the charts.
 
-**The live panel does work on a host,** because it travels over Streamlit's own
-port. It is served from `nids/static/panel.html` at `/app/static/panel.html` and
-polls `/app/static/live.json`, both on the same origin as the app. An earlier
-version ran its own server on a second port; that was fine locally and would
-have come up blank on a host, since a browser resolves `127.0.0.1` to the
-viewer's own machine and Community Cloud only exposes the one port anyway.
+**The live page is rendered by Streamlit, like every other page.** Two earlier
+designs were tried and both failed on Community Cloud, which is worth recording
+so nobody tries them again:
+
+  * A panel served over a second port. Unreachable from a host: a browser
+    resolves `127.0.0.1` to the viewer's own machine, and Community Cloud
+    exposes only the Streamlit port.
+  * A panel served from the app's static folder at `/app/static/`. Works
+    locally. On Community Cloud the request never resolves, even with
+    `enableStaticServing = true` reported as active by the app, the files
+    present on disk at the right path, and the route verified against the real
+    Streamlit route handler. Committing a file to the repo under `static/` did
+    not help either. Whatever sits in front of the container does not pass
+    those paths through.
+
+So the live page uses a fragment on a timer, the in-page CSS radar and inline
+SVG charts. Nothing heavy is inside the fragment, but a fragment rerun does
+replace elements, and that is visible as some movement. Raise the refresh
+interval on Settings to calm it down. The trade was deliberate: a page that
+works everywhere beats one that is perfectly smooth and blank on the host.
 
 **Simulated traffic starts by itself.** A visitor opening the link lands on a
 dashboard that is already alive: the radar sweeping, red contacts on it, the
@@ -31,9 +45,8 @@ will ask about.
 
 ## Repository layout
 
-This layout is not accidental. Community Cloud reads `.streamlit/config.toml`
-only from the repository root, and Streamlit serves the static folder from
-beside the entrypoint script. Both constraints are satisfied below.
+This layout is not accidental. Community Cloud reads `.streamlit/config.toml` only from
+the repository root, which is why it sits there rather than next to `app.py`.
 
 ```
 <repo root>
@@ -44,14 +57,12 @@ beside the entrypoint script. Both constraints are satisfied below.
 ├── SETUP_WINDOWS.md
 └── nids/
     ├── app.py                 the entrypoint you point Cloud at
-    ├── static/                served at /app/static/  (generated at runtime)
     ├── core/  views/  components/
     ├── models/                drop the trained model here
     └── data/                  SQLite log
 ```
 
-Do not move `app.py` out of `nids/`, or `static/` stops being served from the
-right place.
+Do not move `app.py` out of `nids/`, or the imports stop resolving.
 
 ---
 
@@ -94,7 +105,7 @@ The **Deploy** button in your local app opens the same flow.
 | | Local | Deployed |
 |---|---|---|
 | All seven pages | Yes | Yes |
-| Live panel, radar, no blink | Yes | Yes |
+| Live panel and radar | Yes | Yes |
 | Simulated traffic | Yes | Yes |
 | CSV upload and analyze | Yes | Yes |
 | Live capture (nfstream + Npcap) | Yes, with setup | **No** |
@@ -141,8 +152,8 @@ it is not a real option here.
 
 | Symptom | Cause |
 |---|---|
-| App loads, Live Monitoring panel is blank | The static route is not serving. Check `enableStaticServing = true` is in the **root** `.streamlit/config.toml`, and that the main file path is `nids/app.py`. |
+| Live Monitoring redraws visibly every couple of seconds | Expected. Streamlit reruns to update; raise the refresh interval on Settings to calm it down. Run locally if you need it perfectly smooth. |
 | `ModuleNotFoundError: nids` | Main file path is wrong. It must be `nids/app.py`, and `nids/__init__.py` must be committed. |
 | Build fails on nfstream | Something re-added it to `requirements.txt`. It does not belong there. |
 | App is slow or gets killed | Community Cloud has a memory limit. Lower the simulated flow rate on Settings, or reduce `BUFFER_SIZE` in `core/store.py`. |
-| Panel says DISCONNECTED | The app went to sleep or restarted. Reload the page. |
+

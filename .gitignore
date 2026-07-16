@@ -7,7 +7,3 @@ nids/models/*.json
 !nids/models/.gitkeep
 .streamlit/secrets.toml
 
-# Generated at runtime by core/livefile.py
-nids/static/panel.html
-nids/static/live.json
-nids/static/*.tmp
