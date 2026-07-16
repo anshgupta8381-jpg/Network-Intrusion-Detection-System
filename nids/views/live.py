@@ -174,8 +174,72 @@ def render() -> None:
     # reachable at all.
     st.iframe(f"{livefile.panel_url}?{query}", height=PANEL_HEIGHT)
 
-    st.caption(
-        f"Panel polls /app/static/live.json \u00b7 "
-        f"{livefile.writes:,} snapshots published \u00b7 "
-        f"{pipeline.scored:,} flows scored this session"
-    )
+    _panel_diagnostics(livefile, pipeline)
+
+
+def _panel_diagnostics(livefile, pipeline) -> None:
+    """
+    Report why the panel is or is not loading.
+
+    The panel depends on three things lining up: static serving switched on, the
+    files written, and Streamlit serving them at the expected path. When it
+    fails, all three look identical from the outside, which is why they are
+    printed here rather than left to be guessed at from the logs.
+    """
+    import os
+
+    enabled = st.get_option("server.enableStaticServing")
+
+    panel_ok = os.path.exists(livefile.panel_path)
+    live_ok = os.path.exists(livefile.live_path)
+    panel_size = os.path.getsize(livefile.panel_path) if panel_ok else 0
+    live_size = os.path.getsize(livefile.live_path) if live_ok else 0
+
+    if not enabled:
+        st.error(
+            "Static file serving is off, so the panel above cannot load. "
+            "Streamlit only creates the /app/static/ route when "
+            "`enableStaticServing = true` is set under `[server]` in the "
+            "`.streamlit/config.toml` at the **root of the repository**. "
+            "Check that the file is committed and that the option is in it."
+        )
+    elif not panel_ok:
+        st.error(
+            f"Static serving is on, but {livefile.panel_path} was not written. "
+            "The panel cannot load until it exists."
+        )
+
+    with st.expander("Panel diagnostics", expanded=not (enabled and panel_ok)):
+        st.markdown(
+            html(
+                f"""
+                <div style="font-family:var(--font-mono);font-size:0.78rem;
+                            line-height:1.9;color:{COLORS['text_secondary']};">
+                <b style="color:{COLORS['text']};">enableStaticServing</b>:
+                    <span style="color:{COLORS['normal'] if enabled else COLORS['attack']};">
+                    {enabled}</span><br>
+                <b style="color:{COLORS['text']};">static folder</b>: {livefile.static_dir}<br>
+                <b style="color:{COLORS['text']};">panel.html</b>:
+                    <span style="color:{COLORS['normal'] if panel_ok else COLORS['attack']};">
+                    {'present' if panel_ok else 'MISSING'}</span> ({panel_size:,} bytes)<br>
+                <b style="color:{COLORS['text']};">live.json</b>:
+                    <span style="color:{COLORS['normal'] if live_ok else COLORS['attack']};">
+                    {'present' if live_ok else 'MISSING'}</span> ({live_size:,} bytes)<br>
+                <b style="color:{COLORS['text']};">snapshots published</b>: {livefile.writes:,}<br>
+                <b style="color:{COLORS['text']};">flows scored</b>: {pipeline.scored:,}<br>
+                <b style="color:{COLORS['text']};">pipeline running</b>: {pipeline.running}
+                </div>
+                """
+            ),
+            unsafe_allow_html=True,
+        )
+
+        st.caption(
+            "Open these directly to test the route. Both should load; panel.html "
+            "renders the panel, live.json shows the current snapshot."
+        )
+        st.code("app/static/panel.html\napp/static/live.json", language=None)
+        st.markdown(
+            "[Open panel.html](app/static/panel.html) &nbsp;|&nbsp; "
+            "[Open live.json](app/static/live.json)"
+        )
