@@ -1,0 +1,46 @@
+# Streamlit's own theme. The application injects its full stylesheet on top of
+# this, but these values control the chrome Streamlit draws before that CSS
+# loads, which stops the page flashing white on first paint.
+
+[theme]
+base = "dark"
+primaryColor = "#3BE8DC"
+backgroundColor = "#05060A"
+secondaryBackgroundColor = "#0C0E14"
+textColor = "#E6EAF2"
+font = "sans serif"
+
+[server]
+headless = true
+
+# Serves the "static" folder next to app.py at /app/static/... on Streamlit's
+# own port and origin. The live panel and its snapshot file are delivered this
+# way, which is what lets the panel work identically on a laptop and on a
+# deployed host. Files are read from disk on every request, so the snapshot the
+# pipeline rewrites is always the one the browser gets.
+enableStaticServing = true
+
+# The file watcher is off deliberately.
+#
+# On Windows with CPython 3.13, tearing down a session (browser tab closed,
+# refreshed, or the websocket dropped) joins the watchdog observer thread, and
+# that join can hit an open CPython bug in the parking_lot semaphore:
+#
+#   Fatal Python error: _PySemaphore_Wakeup: parking_lot: ReleaseSemaphore failed
+#   https://github.com/python/cpython/issues/148820
+#
+# It kills the whole server, not just the session. Setting this to "none" makes
+# Streamlit use NoOpPathWatcher, so no watchdog thread is created and the join
+# never happens. The cost is that edits to .py files no longer reload the app
+# automatically; restart it by hand after changing code.
+#
+# The underlying bug is in CPython, not in Streamlit or in this application.
+# Running on Python 3.12 avoids it without giving up auto-reload.
+fileWatcherType = "none"
+
+# Flow CSV exports from CICIDS2017 are large. The default 200 MB cap is raised
+# so a full day's export can be uploaded without being rejected.
+maxUploadSize = 1000
+
+[browser]
+gatherUsageStats = false
