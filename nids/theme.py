@@ -143,7 +143,7 @@ CSS = """
     --attack: #FF5C6C;
     --critical: #FF3355;
     --violet: #B48CFF;
-    --font-display: 'Orbitron', sans-serif;
+    --font-display: 'Inter', sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
     --font-body: 'Inter', sans-serif;
 }
