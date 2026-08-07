@@ -34,6 +34,7 @@ class FlowStore:
         self._alerts: Deque[Dict] = deque(maxlen=ALERT_SIZE)
         self.started_at = time.time()
         self._seq = 0
+        self.session_id = 0
 
     # -- writing ---------------------------------------------------------
 
@@ -112,6 +113,7 @@ class FlowStore:
             self._flows.clear()
             self._alerts.clear()
             self.started_at = time.time()
+            self.session_id += 1
 
     def uptime(self) -> float:
         return time.time() - self.started_at

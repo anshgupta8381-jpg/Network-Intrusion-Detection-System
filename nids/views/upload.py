@@ -19,6 +19,72 @@ from ..core.schema import align_to_schema
 from ..theme import html, COLORS
 
 
+def _pcap_to_frame(uploaded) -> "pd.DataFrame | None":
+    """
+    Convert an uploaded packet capture into a flow feature frame.
+
+    Wireshark's own CSV export lists packets, not flows, so it does not carry
+    the features the model needs. Instead the raw .pcap is run through nfstream,
+    the same flow extractor family used to build CICIDS2017, which computes the
+    twenty flow features per connection. The student uploads the capture and the
+    conversion happens here, with nothing to export by hand.
+
+    Returns a DataFrame of flow records, or None if the conversion could not run
+    (with the reason shown to the user).
+    """
+    try:
+        from nfstream import NFStreamer
+    except Exception:
+        st.error(
+            "Reading .pcap files needs the nfstream library, which is not "
+            "installed here. Install it with `pip install nfstream` (and Npcap "
+            "on Windows), or upload a flow CSV instead."
+        )
+        return None
+
+    import os
+    import tempfile
+
+    from ..core.capture import NfstreamSource
+
+    # nfstream reads from a path, so the upload is written to a temp file first.
+    suffix = ".pcapng" if uploaded.name.lower().endswith(".pcapng") else ".pcap"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    try:
+        tmp.write(uploaded.getbuffer())
+        tmp.close()
+
+        with st.spinner("Converting the capture into flows with nfstream..."):
+            # n_meters=1 for the same reason as live capture: without it
+            # nfstream spawns worker processes that need an
+            # "if __name__ == '__main__'" guard, which does not exist inside
+            # Streamlit, and the conversion hangs indefinitely instead of
+            # finishing. A single in-thread meter converts a capture of this
+            # size in well under a second.
+            streamer = NFStreamer(
+                source=tmp.name, statistical_analysis=True, n_meters=1
+            )
+            records = [NfstreamSource.to_features(flow) for flow in streamer]
+
+        if not records:
+            return pd.DataFrame()
+
+        st.success(
+            f"Converted {len(records):,} flows from the capture. "
+            "These are now scored exactly like an uploaded CSV."
+        )
+        return pd.DataFrame(records)
+
+    except Exception as error:  # noqa: BLE001
+        st.error(f"Could not read the capture: {error}")
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+
+
 def _validation_report(frame: pd.DataFrame, missing: list) -> None:
     """Show what was found and what was filled in."""
     found = len(state.get_engine().feature_columns) - len(missing)
@@ -58,12 +124,13 @@ def render() -> None:
 
     with upload_column:
         uploaded = st.file_uploader(
-            "Drop a flow CSV here",
-            type=["csv"],
+            "Drop a flow CSV or a packet capture here",
+            type=["csv", "pcap", "pcapng"],
             help=(
-                "A CICIDS2017-style export, or any CSV whose columns match the "
-                "model feature names. Column matching ignores case, underscores "
-                "and leading spaces."
+                "Either a CICIDS2017-style flow CSV, or a raw packet capture "
+                "(.pcap / .pcapng) from Wireshark or tcpdump. A capture is "
+                "converted to flow features automatically, so you do not need "
+                "to export a CSV from Wireshark yourself."
             ),
         )
 
@@ -86,19 +153,28 @@ def render() -> None:
         if st.session_state.batch_results is None:
             cards.empty_state(
                 "No file loaded.",
-                "Upload a CSV above, or download the sample file to see the "
-                "expected column layout.",
+                "Upload a CSV or a .pcap above, or download the sample file to "
+                "see the expected column layout.",
             )
             return
     else:
-        try:
-            frame = pd.read_csv(uploaded)
-        except Exception as error:  # noqa: BLE001
-            st.error(f"Could not read the file: {error}")
-            return
+        is_pcap = uploaded.name.lower().endswith((".pcap", ".pcapng"))
+
+        if is_pcap:
+            frame = _pcap_to_frame(uploaded)
+            if frame is None:
+                return
+        else:
+            try:
+                frame = pd.read_csv(uploaded)
+            except Exception as error:  # noqa: BLE001
+                st.error(f"Could not read the file: {error}")
+                return
 
         if frame.empty:
-            st.error("The file has no rows.")
+            st.error("The file has no rows." if not is_pcap else
+                     "No flows were found in that capture. It may be empty or "
+                     "contain only traffic the flow extractor could not parse.")
             return
 
         st.markdown(html("<div style='height:0.6rem;'></div>"), unsafe_allow_html=True)

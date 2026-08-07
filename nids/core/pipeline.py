@@ -65,13 +65,15 @@ class Pipeline:
         def worker():
             while not self._stop.is_set():
                 try:
+                    session_id_before = self.store.session_id
                     rows = self.capture.drain(limit=DRAIN_LIMIT)
                     if rows:
                         self.engine.predict_records(rows)
-                        raised = self.store.add(rows, self.alert_threshold)
-                        self.scored += len(rows)
-                        if raised:
-                            db.write_detections(raised, source="live")
+                        if self.store.session_id == session_id_before:
+                            raised = self.store.add(rows, self.alert_threshold)
+                            self.scored += len(rows)
+                            if raised:
+                                db.write_detections(raised, source="live")
 
                     # Republish even when no flows arrived, so the panel still
                     # learns that capture stopped or started.

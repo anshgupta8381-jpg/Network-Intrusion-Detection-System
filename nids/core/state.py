@@ -186,6 +186,10 @@ def autostart_demo() -> None:
 
 def reset_session() -> None:
     """Clear the live buffer and alert feed without touching the SQLite log."""
+    # Drain any lingering flows from the capture queue before clearing the store
+    # so the background pipeline doesn't score them and write them back.
+    get_capture().drain(limit=4000)
+    
     get_store().clear()
     st.session_state.seeded = False
     st.session_state.session_start = time.time()

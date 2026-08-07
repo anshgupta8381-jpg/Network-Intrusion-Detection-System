@@ -29,69 +29,93 @@ import time
 
 import streamlit as st
 
-from ..components import cards, charts, radar
+from ..components import cards, charts, radar, radar_live
 from ..core import state
 from ..core.capture import NfstreamSource, PcapSource, SimulatedSource
 from ..theme import COLORS, html
 
 
 def _controls() -> None:
-    """Capture source selector and start/stop buttons."""
+    """Capture-mode toggle (Simulation vs Live) and start/stop buttons."""
     capture = state.get_capture()
     settings = state.settings()
 
-    columns = st.columns([1.3, 1, 1, 1, 1.2])
+    nfstream_ready = NfstreamSource.available()
 
-    with columns[0]:
-        options = ["Simulated"]
-        if NfstreamSource.available():
-            options.append("Live interface")
-            options.append("PCAP file")
+    # The mode toggle. Two clear choices rather than a dropdown: Simulation for
+    # the generated-traffic demo, Live for real capture through nfstream.
+    mode_col, cfg_col, refresh_col, alert_col, button_col = st.columns(
+        [1.5, 1.3, 1, 1, 1.2]
+    )
 
-        source_kind = st.selectbox(
-            "Capture source",
-            options,
+    with mode_col:
+        mode = st.radio(
+            "Capture mode",
+            ["Simulation", "Live"],
+            horizontal=True,
             help=(
-                "Simulated needs no drivers. Live interface requires nfstream "
-                "plus Npcap and an Administrator terminal, and is not available "
-                "on a deployed app."
+                "Simulation generates realistic attack traffic and needs no "
+                "drivers. Live captures real traffic from a network interface "
+                "and needs nfstream plus Npcap installed."
             ),
         )
 
-    interface = None
-    pcap_path = None
+        # Stop if mode toggled while running
+        is_sim = (capture.source_name == "Simulated")
+        is_live = (capture.source_name == "nfstream")
+        if (mode == "Live" and is_sim) or (mode == "Simulation" and is_live):
+            if capture.running:
+                capture.stop()
+                st.rerun()
 
-    with columns[1]:
-        if source_kind == "Live interface":
-            interfaces = NfstreamSource.list_interfaces()
-            if interfaces:
-                interface = st.selectbox("Interface", interfaces)
+    interface = None
+
+    with cfg_col:
+        if mode == "Live":
+            if nfstream_ready:
+                interfaces = NfstreamSource.list_interfaces()
+                if interfaces:
+                    interface = st.selectbox("Interface", interfaces)
+                else:
+                    interface = st.text_input("Interface", value="Wi-Fi")
             else:
-                interface = st.text_input("Interface", value="Wi-Fi")
-        elif source_kind == "PCAP file":
-            pcap_path = st.text_input("PCAP path", value="data/sample.pcap")
+                # Live chosen but the library is missing: say so plainly instead
+                # of failing when Start is pressed.
+                st.markdown(
+                    html(
+                        f"""
+                        <div style="font-size:0.72rem;line-height:1.5;
+                                    color:{COLORS['probe']};padding-top:0.4rem;">
+                        nfstream not installed.<br>
+                        <code>pip install nfstream</code><br>
+                        and install Npcap.
+                        </div>
+                        """
+                    ),
+                    unsafe_allow_html=True,
+                )
         else:
             settings["flows_per_second"] = st.number_input(
                 "Flows/sec", 0.5, 60.0, float(settings["flows_per_second"]), 0.5
             )
 
-    with columns[2]:
+    with refresh_col:
         settings["refresh_seconds"] = st.number_input(
             "Refresh (s)", 1, 30, int(settings["refresh_seconds"]),
-            help=(
-                "How often the live panel redraws. Raising this makes the page "
-                "calmer; the radar sweep keeps animating either way."
-            ),
+            help="How often the live panel redraws. The radar keeps animating either way.",
         )
 
-    with columns[3]:
+    with alert_col:
         settings["alert_threshold"] = st.slider(
             "Alert conf.", 0.0, 1.0, float(settings["alert_threshold"]), 0.05
         )
 
-    with columns[4]:
+    with button_col:
         st.markdown(html("<div style='height:1.75rem;'></div>"), unsafe_allow_html=True)
         buttons = st.columns(2)
+
+        # In Live mode without nfstream, Start would only raise, so it is disabled.
+        can_start = mode == "Simulation" or nfstream_ready
 
         with buttons[0]:
             if capture.running:
@@ -99,11 +123,14 @@ def _controls() -> None:
                     capture.stop()
                     st.rerun()
             else:
-                if st.button("Start", type="primary", width="stretch"):
-                    if source_kind == "Live interface":
-                        source = NfstreamSource(interface=interface)
-                    elif source_kind == "PCAP file":
-                        source = PcapSource(path=pcap_path)
+                if st.button("Start", type="primary", width="stretch", disabled=not can_start):
+                    # Unconditionally clear whatever the previous session left behind before starting.
+                    # This ensures every new capture starts from 0, and retains the results in the 
+                    # Results tab only while stopped.
+                    state.reset_session()
+
+                    if mode == "Live":
+                        source = NfstreamSource(interface=interface or "Wi-Fi")
                     else:
                         source = SimulatedSource(
                             flows_per_second=settings["flows_per_second"],
@@ -115,8 +142,23 @@ def _controls() -> None:
 
         with buttons[1]:
             if st.button("Clear", width="stretch"):
+                if capture.running:
+                    capture.stop()
                 state.reset_session()
                 st.rerun()
+
+    # A one-line honest status under the controls, so it is always clear whether
+    # the numbers on screen are generated or real.
+    if capture.running and capture.source_name == "nfstream":
+        st.caption(
+            "Live capture is on. This shows real traffic through your own machine, "
+            "so it will mostly read BENIGN unless something is actually attacking it."
+        )
+    elif capture.running:
+        st.caption(
+            "Simulation is on. The traffic below is generated for demonstration, "
+            "not captured from the network."
+        )
 
 
 def _live_panel() -> None:
@@ -162,13 +204,23 @@ def _live_panel() -> None:
     left, right = st.columns([1.5, 1])
 
     with left:
-        cards.section("Live traffic flows")
+        # The heading names the actual source, so it is always clear whether the
+        # rows below are generated or captured from a real interface.
+        if capture.running and capture.source_name == "nfstream":
+            cards.section("Live captured flows")
+        elif capture.running:
+            cards.section("Simulated traffic flows")
+        else:
+            cards.section("Traffic flows")
         cards.flow_table(state.recent_flows(80), height=430)
 
     with right:
         cards.section("Threat radar")
         blips = radar.build_blips(state.recent_flows(160))
-        radar.render(
+        # Self-animating canvas radar: its sweep runs on requestAnimationFrame
+        # inside the component, so the page rerunning around it does not reset
+        # the sweep. Only the blips update when the page refreshes.
+        radar_live.render(
             blips,
             height=340,
             retention=settings["radar_retention"],

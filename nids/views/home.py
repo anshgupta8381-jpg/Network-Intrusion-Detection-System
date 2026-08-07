@@ -10,19 +10,11 @@ from ..core import state
 from ..theme import html, COLORS
 
 
-def render() -> None:
+def _overview_panel() -> None:
     engine = state.get_engine()
     capture = state.get_capture()
     settings = state.settings()
     stats = state.stats()
-
-    mode_color = COLORS["accent"] if engine.status.mode == "MODEL" else COLORS["probe"]
-    cards.page_header(
-        "OVERVIEW",
-        "Session summary and current network posture",
-        f'<span class="dot" style="--chip-color:{mode_color};"></span>'
-        f"{engine.status.mode} &nbsp;|&nbsp; {engine.status.model_name}",
-    )
 
     cards.kpi_grid(
         [
@@ -127,3 +119,19 @@ def render() -> None:
         f"Session uptime {uptime} \u00b7 capture source {capture.source_name} \u00b7 "
         f"{engine.status.feature_count} features per flow"
     )
+
+def render() -> None:
+    engine = state.get_engine()
+    capture = state.get_capture()
+    settings = state.settings()
+
+    mode_color = COLORS["accent"] if engine.status.mode == "MODEL" else COLORS["probe"]
+    cards.page_header(
+        "OVERVIEW",
+        "Session summary and current network posture",
+        f'<span class="dot" style="--chip-color:{mode_color};"></span>'
+        f"{engine.status.mode} &nbsp;|&nbsp; {engine.status.model_name}",
+    )
+
+    interval = settings["refresh_seconds"] if capture.running else None
+    st.fragment(_overview_panel, run_every=interval)()

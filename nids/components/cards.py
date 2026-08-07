@@ -147,8 +147,21 @@ def flow_table(rows: List[Dict], height: int = 420, show_index: bool = False) ->
         <style>
             table.flows {{
                 width:100%; border-collapse:collapse;
+                table-layout:fixed;
                 font-family:'JetBrains Mono', monospace; font-size:0.76rem;
             }}
+            /* Fixed column widths so a long IPv6 address in Source or
+               Destination can no longer stretch the table and push Proto,
+               Prediction and Conf off the right edge (which hid them entirely
+               on live capture, where addresses are long IPv6 ones). The two
+               address columns get the slack and ellipsis-truncate; the rest
+               keep a guaranteed share. */
+            table.flows col.c-time {{ width:9%; }}
+            table.flows col.c-addr {{ width:26%; }}
+            table.flows col.c-proto {{ width:7%; }}
+            table.flows col.c-dur {{ width:9%; }}
+            table.flows col.c-pred {{ width:15%; }}
+            table.flows col.c-conf {{ width:8%; }}
             table.flows thead th {{
                 position:sticky; top:0; z-index:2;
                 background:{COLORS['surface_2']};
@@ -163,11 +176,17 @@ def flow_table(rows: List[Dict], height: int = 420, show_index: bool = False) ->
                 border-bottom:1px solid rgba(35, 40, 56, 0.6);
                 color:{COLORS['text']};
                 white-space:nowrap;
+                overflow:hidden; text-overflow:ellipsis;
             }}
             table.flows tbody tr:hover {{ background:rgba(59, 232, 220, 0.06) !important; }}
             table.flows .c-mut {{ color:{COLORS['text_muted']}; }}
         </style>
         <table class="flows">
+            <colgroup>
+                <col class="c-time"><col class="c-addr"><col class="c-addr">
+                <col class="c-proto"><col class="c-dur"><col class="c-pred">
+                <col class="c-conf">
+            </colgroup>
             <thead>
                 <tr>
                     <th>Time</th><th>Source</th><th>Destination</th>

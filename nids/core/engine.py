@@ -197,14 +197,33 @@ class Engine:
         return labels, [float(c) for c in confidences], missing
 
     def predict_records(self, records: List[dict]) -> List[dict]:
-        """Score a list of flow dictionaries and write results back onto them."""
+        """
+        Score a list of flow dictionaries and write results back onto them.
+
+        Simulated flows are left alone. A simulated flow carries a "_truth" key
+        and its feature values only sit in a plausible range for their class,
+        not the real CICIDS distribution, so a trained model correctly reads
+        most of them as benign. Scoring them would empty the demo radar for no
+        gain: simulated traffic is for demonstration, not detection. Real flows
+        (uploaded CSVs, live capture) have no "_truth" key and are scored.
+        """
         if not records:
             return []
 
-        frame = pd.DataFrame(records)
+        real = [r for r in records if "_truth" not in r]
+
+        # Simulated flows keep the label the simulator already gave them.
+        for record in records:
+            if "_truth" in record:
+                record["prediction"] = record["_truth"]
+
+        if not real or self.status.mode != "MODEL":
+            return records
+
+        frame = pd.DataFrame(real)
         labels, confidences, _ = self.predict_frame(frame)
 
-        for record, label, confidence in zip(records, labels, confidences):
+        for record, label, confidence in zip(real, labels, confidences):
             record["prediction"] = label
             record["confidence"] = round(float(confidence), 3)
 
