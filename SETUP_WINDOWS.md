@@ -1,8 +1,9 @@
 # Windows setup guide
 
 Everything you need to do by hand on your machine, in order. Steps 1 to 3 get
-the dashboard running. Steps 4 onward are only needed when you want live capture
-and the real model.
+the dashboard running with the trained model that ships in this repository.
+Steps 4 and 5 are only needed if you also want live packet capture. Step 6 is
+optional and only covers retraining your own model.
 
 Verified against nfstream 6.6.0 (released February 2026) and Npcap as of
 July 2026. If a link has moved, the tool name is still correct.
@@ -76,10 +77,12 @@ everything on first run.
 
 To stop it: press `Ctrl+C` in the terminal.
 
-At this point every screen works. The sidebar will say **"Simulation mode"**,
-which is correct and honest: there is no trained model yet, so the app is showing
-generated traffic. Go to Live Monitoring and press **Start** to watch the radar
-sweep and the flow table fill up.
+At this point every screen works. If the trained model files are present in
+`models\` (they are included in this repository), the sidebar shows the model
+name and predictions are real. If they are not, the sidebar says **"Simulation
+mode"**, which is correct and honest: with no model, the app shows generated
+traffic. Either way, go to Live Monitoring and press **Start** to watch the
+radar sweep and the flow table fill up.
 
 ---
 
@@ -164,53 +167,52 @@ a shortcoming.
 
 ---
 
-## Step 6 - Train the model and plug it in
+## Step 6 - The model (already included)
 
-The app never trains. It loads what your notebook exports.
+**The trained model ships with this repository.** The five files in `models\`
+are the RandomForest model trained on CICIDS2017, so a fresh clone runs with real
+predictions out of the box, nothing to train. When you start the app the sidebar
+shows the model name rather than "Simulation mode". You can skip the rest of this
+step.
 
-### 6a. Get the dataset
+### Retraining (optional)
 
-CICIDS2017 from <https://www.unb.ca/cic/datasets/ids-2017.html>
+Only do this if you want to train your own model, for example on a different
+dataset or feature set. Training does not happen in the app; the app only loads
+what the notebook exports.
 
-Download the **MachineLearningCSV.zip** (the pre-computed flow features, roughly
-1 GB unzipped). You do not need the raw PCAPs for training.
+1. **Dataset.** CICIDS2017 from <https://www.unb.ca/cic/datasets/ids-2017.html>
+   (the **MachineLearningCSV.zip**, roughly 1 GB unzipped). You do not need the
+   raw PCAPs. The training notebook can also download it automatically.
+2. **Train in Colab.** The notebook `NIDS_Training_CICIDS2017.ipynb` in this
+   repository does the whole thing: downloads the data, maps the columns, handles
+   the class imbalance, trains and compares models, computes SHAP, and exports
+   the five files. Run it top to bottom in Google Colab; your laptop will
+   struggle with 2.8 million rows.
+3. **Plug it in.** The notebook exports these five files:
 
-### 6b. Train in Colab
+   | File | What it is |
+   |---|---|
+   | `model.joblib` | the fitted classifier |
+   | `scaler.joblib` | the scaler fitted on the training features |
+   | `feature_columns.json` | the ordered feature names used at training |
+   | `label_encoder.joblib` | maps class numbers back to names |
+   | `metrics.json` | evaluation results for the Model Performance page |
 
-Your laptop will struggle with 2.8 million rows. Use Colab, upload the CSVs to
-Drive, and train there.
+   Drop them into `models\`, then in the app go to
+   **Settings / About → Model → Reload model**. Nothing else changes: the radar,
+   alerts, tables and exports keep working exactly as before.
 
-The exact export code your notebook needs is on the **Model Performance** page of
-the dashboard, in the expander at the bottom. Copy it from there so it stays in
-sync with what the app reads.
+**Keep scikit-learn versions matched.** Train and run with the same scikit-learn
+version. A model pickled under one version and loaded under another raises an
+`InconsistentVersionWarning` and can misbehave; `requirements.txt` pins the
+version so a fresh install matches the shipped model.
 
-Your notebook must produce these five files:
-
-| File | What it is |
-|---|---|
-| `model.joblib` | the fitted classifier |
-| `scaler.joblib` | the scaler fitted on the training features |
-| `feature_columns.json` | the ordered feature names used at training |
-| `label_encoder.joblib` | maps class numbers back to names (skip if you trained on string labels) |
-| `metrics.json` | evaluation results for the Model Performance page |
-
-### 6c. Plug it in
-
-1. Download those files from Colab.
-2. Drop them into the **`models\`** folder.
-3. In the app, go to **Settings / About → Model → Reload model**.
-
-The sidebar will change from "Simulation mode" to your model name, and every
-prediction from that point is real. Nothing else changes: the radar, the alerts,
-the tables and the exports all keep working exactly as they did.
-
-**Watch the feature order.** If your notebook trains on a different feature set
-than the 20 in `core/schema.py`, that is fine, just make sure
-`feature_columns.json` reflects it. The app reads that file and aligns every
-input to it. If the file is missing, it falls back to the built-in list, and a
-mismatch there is the one bug that would silently produce nonsense predictions.
-The scaler catches most of this for you: because the app passes column names
-through, sklearn raises rather than scoring your columns in the wrong order.
+**Watch the feature order.** If you train on a different feature set than the 20
+in `core/schema.py`, make sure `feature_columns.json` reflects it, because the
+app aligns every input to that file. The scaler catches most mistakes: since the
+app passes column names through, sklearn raises rather than scoring columns in
+the wrong order.
 
 ---
 
