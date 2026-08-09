@@ -69,11 +69,15 @@ class Pipeline:
                     rows = self.capture.drain(limit=DRAIN_LIMIT)
                     if rows:
                         self.engine.predict_records(rows)
-                        if self.store.session_id == session_id_before:
-                            raised = self.store.add(rows, self.alert_threshold)
-                            self.scored += len(rows)
-                            if raised:
-                                db.write_detections(raised, source="live")
+                        # If the session was reset while we were scoring, the
+                        # store has been cleared and these rows belong to the
+                        # old session. Drop them silently.
+                        if self.store.session_id != session_id_before:
+                            continue
+                        raised = self.store.add(rows, self.alert_threshold)
+                        self.scored += len(rows)
+                        if raised:
+                            db.write_detections(raised, source="live")
 
                     # Republish even when no flows arrived, so the panel still
                     # learns that capture stopped or started.

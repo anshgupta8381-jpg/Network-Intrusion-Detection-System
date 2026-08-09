@@ -321,6 +321,13 @@ class CaptureController:
         self.source_name = source.name
         self.started_at = time.time()
 
+        # Replace the queue with a fresh one so any old flows left over from a
+        # previous capture session are physically unreachable. The pipeline
+        # thread holds a reference to self.queue, so it will see the new one on
+        # its next drain() call. Any flows it already drained from the old queue
+        # will be discarded by the session_id check in the pipeline.
+        self.queue = queue.Queue(maxsize=QUEUE_SIZE)
+
         def worker():
             try:
                 for record in source.flows(self._stop):
@@ -352,6 +359,8 @@ class CaptureController:
             self._thread.join(timeout=2.0)
         self._thread = None
         self.started_at = None
+        # Flush any remaining flows so they don't leak into the next session.
+        self.drain(limit=1_000_000)
 
     def drain(self, limit: int = 400) -> List[Dict]:
         """Take everything currently queued, up to a limit."""
@@ -365,3 +374,4 @@ class CaptureController:
 
     def uptime(self) -> float:
         return 0.0 if self.started_at is None else time.time() - self.started_at
+

@@ -133,6 +133,15 @@ def seed_demo(count: int = 240) -> None:
         st.session_state.seeded = True
         return
 
+    # If a capture session is already running (the user pressed Start), do NOT
+    # inject demo data. Without this guard, reset_session() sets seeded=False
+    # and clears the store, so the very next rerun sees an empty store and
+    # dumps 240 simulated flows into it — which is why Live mode appeared to
+    # start with old simulated data instead of zero.
+    if get_capture().running:
+        st.session_state.seeded = True
+        return
+
     from .simulator import generate_batch
 
     rows = generate_batch(count, attack_bias=settings()["attack_bias"], spread_seconds=900)
@@ -186,10 +195,15 @@ def autostart_demo() -> None:
 
 def reset_session() -> None:
     """Clear the live buffer and alert feed without touching the SQLite log."""
-    # Drain any lingering flows from the capture queue before clearing the store
-    # so the background pipeline doesn't score them and write them back.
-    get_capture().drain(limit=4000)
-    
+    capture = get_capture()
+
+    # Drain any leftover flows from the capture queue so the pipeline thread
+    # doesn't score them and write them back into the freshly cleared store.
+    try:
+        capture.drain(limit=1_000_000)
+    except Exception:  # noqa: BLE001
+        pass
+
     get_store().clear()
     st.session_state.seeded = False
     st.session_state.session_start = time.time()

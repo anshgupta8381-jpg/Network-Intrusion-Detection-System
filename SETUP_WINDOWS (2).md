@@ -37,7 +37,8 @@ troubleshooting.
 ## Step 2 - Install the project dependencies
 
 1. Unzip the project folder somewhere without spaces in the path.
-   `C:\projects\nids` is good. `C:\Users\Sakshi\My Documents\final year\nids`
+   `C:\projects\nids` is good. A path with spaces such as
+   `C:\Users\Ansh\My Documents\final year\nids`
    will cause problems later.
 2. Open Command Prompt in that folder. Easiest way: open the folder in File
    Explorer, click the address bar, type `cmd`, press Enter.
@@ -101,9 +102,15 @@ Verify:
 
 ```
 .venv\Scripts\activate
-pip install nfstream
+pip install nfstream scapy
 python -c "from nfstream import NFStreamer; print('nfstream ready')"
 ```
+
+`scapy` is installed alongside nfstream on purpose. On Windows the app uses it to
+turn the friendly interface name ("Wi-Fi") into the Npcap device path
+(`\Device\NPF_{GUID}`) that nfstream actually needs. Without scapy, live capture
+fails with "please specify a valid network interface name" even though the
+interface is fine.
 
 If that prints `nfstream ready`, you are set.
 

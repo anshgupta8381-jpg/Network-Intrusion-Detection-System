@@ -60,13 +60,14 @@ def _controls() -> None:
             ),
         )
 
-        # Stop if mode toggled while running
-        is_sim = (capture.source_name == "Simulated")
-        is_live = (capture.source_name == "nfstream")
-        if (mode == "Live" and is_sim) or (mode == "Simulation" and is_live):
-            if capture.running:
-                capture.stop()
-                st.rerun()
+    # Switching mode while a capture is running stops it so the user can
+    # press Start to begin the new mode from 0.
+    previous_mode = st.session_state.get("capture_mode")
+    if previous_mode is not None and previous_mode != mode:
+        if capture.running:
+            capture.stop()
+            st.rerun()
+    st.session_state.capture_mode = mode
 
     interface = None
 
@@ -112,39 +113,27 @@ def _controls() -> None:
 
     with button_col:
         st.markdown(html("<div style='height:1.75rem;'></div>"), unsafe_allow_html=True)
-        buttons = st.columns(2)
 
         # In Live mode without nfstream, Start would only raise, so it is disabled.
         can_start = mode == "Simulation" or nfstream_ready
 
-        with buttons[0]:
-            if capture.running:
-                if st.button("Stop", width="stretch"):
-                    capture.stop()
-                    st.rerun()
-            else:
-                if st.button("Start", type="primary", width="stretch", disabled=not can_start):
-                    # Unconditionally clear whatever the previous session left behind before starting.
-                    # This ensures every new capture starts from 0, and retains the results in the 
-                    # Results tab only while stopped.
-                    state.reset_session()
-
-                    if mode == "Live":
-                        source = NfstreamSource(interface=interface or "Wi-Fi")
-                    else:
-                        source = SimulatedSource(
-                            flows_per_second=settings["flows_per_second"],
-                            attack_bias=settings["attack_bias"],
-                        )
-                    capture.start(source)
-                    time.sleep(0.4)
-                    st.rerun()
-
-        with buttons[1]:
-            if st.button("Clear", width="stretch"):
-                if capture.running:
-                    capture.stop()
+        if capture.running:
+            if st.button("Stop", width="stretch"):
+                capture.stop()
+                st.rerun()
+        else:
+            if st.button("Start", type="primary", width="stretch", disabled=not can_start):
+                # Always reset to 0 before starting a new capture session.
                 state.reset_session()
+                if mode == "Live":
+                    source = NfstreamSource(interface=interface or "Wi-Fi")
+                else:
+                    source = SimulatedSource(
+                        flows_per_second=settings["flows_per_second"],
+                        attack_bias=settings["attack_bias"],
+                    )
+                capture.start(source)
+                time.sleep(0.4)
                 st.rerun()
 
     # A one-line honest status under the controls, so it is always clear whether

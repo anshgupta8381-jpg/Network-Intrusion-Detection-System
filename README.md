@@ -1,15 +1,16 @@
 # NIDS - Network Intrusion Detection Dashboard
 
-A Streamlit application layer for a machine learning based network intrusion
-detection system. It sits on top of a classifier trained offline on CICIDS2017,
-supports live capture and batch CSV analysis, and presents detections in a dark
-security-operations interface with a live threat radar.
+A Streamlit application for a machine-learning network intrusion detection
+system. It loads a classifier trained on CICIDS2017 and presents detections in a
+dark security-operations interface with a live threat radar. It reads traffic
+three ways: generated simulation traffic for demos, real live capture from your
+own machine, and uploaded flow CSVs or packet captures.
 
-This is the application described in the design document. It does not train
-anything. It loads an exported model and serves it.
+The model is trained separately (see [Training the model](#training-the-model))
+and dropped into `nids/models/`. Until then the app runs in simulation mode, so
+the whole interface works before the model exists.
 
-**Windows setup: see [SETUP_WINDOWS.md](SETUP_WINDOWS.md).**
-**Deploying: see [DEPLOY.md](DEPLOY.md).**
+**Windows setup, including live capture: see [SETUP_WINDOWS.md](SETUP_WINDOWS.md).**
 
 ---
 
@@ -22,28 +23,76 @@ streamlit run nids/app.py
 
 Run it from the repository root, not from inside `nids/`.
 
-The dashboard runs immediately in **simulation mode** with generated traffic, so
-the whole interface can be built and reviewed before the model exists. Drop the
-trained model into `models/` and it switches to real inference with no code
-change.
+With no model present the dashboard runs in **simulation mode** with generated
+attack traffic. Drop the five trained model files into `nids/models/` and, via
+Settings, reload — every prediction becomes real with no code change.
 
 ---
 
-## What works right now
+## What works
 
 | Feature | Status |
 |---|---|
 | All seven screens | Working |
-| Threat radar with live sweep and blips | Working |
-| Simulated traffic source | Working |
-| Background capture and scoring threads | Working |
-| CSV upload, schema validation, batch scoring | Working |
+| Threat radar, continuous sweep, no reset on refresh | Working |
+| Simulation traffic with generated attacks | Working |
+| Live capture from a real interface (nfstream + Npcap) | Working, Windows + Administrator |
+| Packet-capture upload (.pcap / .pcapng), auto-converted to flows | Working, needs nfstream |
+| Flow CSV upload, schema validation, batch scoring | Working |
+| Trained RandomForest model, real predictions | Working with model in `nids/models/` |
+| SHAP explainability export | Produced by the training notebook |
+| Model Performance page: accuracy, confusion matrix, ROC, per-class | Working with model |
 | SQLite detection log, filters, CSV export | Working |
 | Alert feed and thresholds | Working |
-| nfstream live capture | Code complete, needs Npcap on your machine |
-| PCAP replay | Code complete, needs nfstream |
-| Real predictions | Needs `models/model.joblib` |
-| Model Performance page | Needs `models/metrics.json` |
+
+The trained model reaches about **94.7% accuracy** on held-out CICIDS2017 data.
+Per-class recall is strong for the well-represented attacks (DDoS, PortScan, DoS,
+FTP-Patator) and weaker for the rare ones (Bot, SSH-Patator, Web Attack,
+Infiltration), which is expected given the class imbalance and is reported
+honestly on the Model Performance page rather than hidden behind the headline
+number.
+
+---
+
+## Training the model
+
+Training runs separately in Google Colab, not in this app. The notebook
+`NIDS_Training_CICIDS2017.ipynb` downloads CICIDS2017, maps its columns onto the
+twenty features the app uses, handles the class imbalance, trains and compares
+XGBoost / RandomForest / DecisionTree, computes SHAP explanations, and exports
+the five files the app loads:
+
+```
+model.joblib  scaler.joblib  label_encoder.joblib
+feature_columns.json  metrics.json
+```
+
+Put those five in `nids/models/`, then Settings -> Reload model. The sidebar
+changes from "Simulation mode" to the model name and predictions become real.
+
+**Version note.** Train and run with the same scikit-learn version. A model
+pickled under one version and loaded under another raises an
+`InconsistentVersionWarning` and can misbehave; `requirements.txt` pins the
+version so a fresh install matches.
+
+---
+
+## The three ways traffic gets in
+
+- **Simulation** generates realistic attack traffic and needs no drivers. Best
+  for a demo, because the radar and the counters are always full. Simulated
+  flows keep their generated labels rather than being scored, since their
+  feature values only approximate real attacks; scoring them would empty the
+  radar for no gain.
+- **Live capture** reads real traffic from your own interface through nfstream.
+  It shows genuine flows, but on ordinary Wi-Fi it will read almost everything
+  as BENIGN, because nothing is actually attacking you. That is correct
+  behaviour, not a bug: this kind of tool only sees traffic through the machine
+  it runs on.
+- **Upload** takes either a flow CSV or a raw packet capture. A `.pcap` /
+  `.pcapng` is converted to flow features automatically with nfstream, so there
+  is nothing to export from Wireshark by hand. Attacks only appear if the
+  capture actually contains attack traffic.
 
 ---
 
@@ -82,17 +131,40 @@ live in `core/store.py` at process level, because a background thread cannot
 touch session state.
 
 The live page redraws through `st.fragment(run_every=...)`, so only the panel
-reruns and the controls, header and sidebar are left alone. What is inside that
-fragment is deliberately cheap: the CSS radar, an HTML table and two inline
-SVGs. No Plotly, which rebuilds its JavaScript chart on every render, and no
-iframe, which reloads on every render.
+reruns and the controls, header and sidebar are left alone. The counters, table
+and charts update on that timer.
 
-A rerun still replaces elements, and that is visible as some movement. Two
-smoother designs were built and both proved undeployable; see DEPLOY.md.
+The radar is the exception, and deliberately so. It is a self-contained HTML
+canvas (`components/radar_live.py`) that animates its sweep on
+requestAnimationFrame *inside* the component, independent of Streamlit's reruns.
+An earlier CSS radar restarted its sweep on every rerun, because Streamlit
+replaced the element and a fresh element began its animation again; the sweep
+visibly jumped. The canvas version anchors its sweep angle to the server clock,
+so even when the page reruns around it the sweep runs continuously and never
+resets. The charts are inline SVG rather than Plotly, which would rebuild its
+JavaScript on every render.
 
 The capture queue is bounded on purpose: if the pipeline falls behind, dropping
 the oldest flows beats growing memory without limit, and the drop count is shown
 on the live page rather than hidden.
+
+### Live capture on Windows
+
+Live capture goes through nfstream, which sits on the Npcap driver, and three
+Windows-specific details matter, all handled in `core/capture.py`:
+
+- nfstream needs the Npcap **device path** (`\Device\NPF_{GUID}`), not the
+  friendly name "Wi-Fi". The friendly name is shown in the dropdown and resolved
+  to the device path before capture.
+- nfstream is run with **one meter** (`n_meters=1`). Its default spawns worker
+  processes that need an `if __name__ == '__main__'` guard, which does not exist
+  inside a Streamlit thread, so without this capture silently produces nothing.
+- Timeouts are **short** (idle 2s, active 10s) so flows expire and reach the
+  screen promptly, rather than being held for up to a minute as the library
+  defaults would.
+
+Capture also needs an **Administrator** terminal; Npcap will not open an
+interface otherwise.
 
 ---
 
@@ -117,7 +189,8 @@ nids/
 │   └── state.py            cached resources and shared accessors
 │
 ├── components/
-│   ├── radar.py            in-page CSS radar
+│   ├── radar.py            in-page CSS radar (Overview)
+│   ├── radar_live.py       self-animating canvas radar (Live Monitoring)
 │   ├── cards.py            KPI cards, tables, alert feed
 │   └── charts.py           themed Plotly charts
 │
@@ -152,15 +225,22 @@ Every status also carries a **text label and a shape glyph**, never colour alone
 
 ### The radar
 
-Drawn as elements in the page, not on a canvas in an iframe, because an iframe
-reloads on every rerun and that is a visible flash.
+There are two radars, for two different situations.
 
-There is no JavaScript. The sweep and the per-blip flash are CSS animations, and
-they survive reruns through a negative `animation-delay` computed from the server
-clock: an element rendered with `animation-delay: -1.2s` starts 1.2 seconds into
-its cycle, so a fresh element picks the sweep up where the previous one left off
-instead of restarting at zero. Each blip's flash is delayed by its own bearing,
-so it lights up exactly as the sweep crosses it.
+**Overview** uses an in-page CSS radar (`components/radar.py`). No JavaScript:
+the sweep and per-blip flash are CSS animations that survive the occasional
+rerun through a negative `animation-delay` computed from the server clock, so a
+fresh element picks the sweep up where the previous one left off. This page does
+not refresh on a timer, so that is enough.
+
+**Live Monitoring** uses a canvas radar (`components/radar_live.py`) because that
+page *does* refresh on a timer, and the CSS trick is not enough there: every
+rerun replaces the element, and the sweep visibly jumps. The canvas animates on
+requestAnimationFrame inside the component, independent of Streamlit, and anchors
+its angle to the server clock, so it runs continuously and never resets on
+refresh.
+
+Both position blips the same way:
 
 - **Bearing** is a hash of the source address, so the same attacker returns to
   the same part of the scope every time. This is what makes it readable rather
@@ -179,6 +259,24 @@ report says so too. A dashboard that looks live while running on generated data
 is worse than one that admits it, and it is the kind of thing an examiner will
 ask about directly.
 
+There is a second, related point worth being explicit about. **Even when a model
+is loaded, simulated flows are not scored by it** — they keep the label the
+simulator generated. This is deliberate: the simulator's feature values only sit
+in a plausible range for each class, not the true CICIDS distribution, so a
+trained model would (correctly) read most of them as benign and the demo radar
+would empty out. So simulation demonstrates the dashboard — real-time flow
+handling, the radar, alerting, the charts — while the **actual model inference
+happens on real inputs**: uploaded CSVs, uploaded packet captures, and live
+capture. If you want to show the model detecting an attack, upload a CICIDS
+attack CSV; that is real inference on real attack flows.
+
+This is also why live capture on ordinary traffic reads benign, and why a live
+`nmap` scan is usually not flagged: the model generalises poorly from the
+CICIDS lab distribution to different live traffic. That is a known property of
+models trained on a single dataset (dataset shift), not a preprocessing bug —
+the pipeline does clean the infinities that zero-duration flows produce, in both
+training and inference.
+
 ---
 
 ## Configuration
@@ -193,3 +291,10 @@ dependencies are present.
 ## Ethics
 
 Only capture traffic on networks you own or administrate.
+
+---
+
+## License
+
+Released under the MIT License. See [LICENSE](LICENSE).
+
