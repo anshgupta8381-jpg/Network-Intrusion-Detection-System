@@ -10,7 +10,7 @@ The model is trained separately (see [Training the model](#training-the-model))
 and dropped into `nids/models/`. Until then the app runs in simulation mode, so
 the whole interface works before the model exists.
 
-**Windows setup, including live capture: see [SETUP_WINDOWS.md](SETUP_WINDOWS.md).**
+> **Quick links:** [Windows setup](SETUP_WINDOWS.md) &nbsp;·&nbsp; [Sample CSVs to try](https://drive.google.com/drive/folders/1ayxVxopzhZoTCF7kOJRQj1sQcG0SNL8o?usp=drive_link) &nbsp;·&nbsp; [Training notebook](NIDS_Training_CICIDS2017.ipynb) &nbsp;·&nbsp; [License](LICENSE)
 
 ---
 
@@ -93,6 +93,19 @@ version so a fresh install matches.
   `.pcapng` is converted to flow features automatically with nfstream, so there
   is nothing to export from Wireshark by hand. Attacks only appear if the
   capture actually contains attack traffic.
+
+### Sample data to try
+
+To see real detections on the **Upload & Analyze** page without capturing
+anything yourself, use the CICIDS2017 flow CSVs here:
+
+**[Sample CICIDS2017 CSVs (Google Drive)](https://drive.google.com/drive/folders/1ayxVxopzhZoTCF7kOJRQj1sQcG0SNL8o?usp=drive_link)**
+
+Download one — for example the Friday PortScan or DDoS file — and upload it on
+the Upload & Analyze page. Because these are the real attack flows the model was
+trained on, it detects the attacks in them, unlike ordinary live traffic. The
+files are large; the app extracts the twenty features it needs and ignores the
+rest, so there is nothing to prepare.
 
 ---
 
