@@ -11,9 +11,15 @@ numpy>=1.24
 plotly>=5.20
 
 # Model serving. Needed once model.joblib is exported from the training
-# notebook. scikit-learn must be the same major version that trained the model,
-# otherwise joblib will warn or fail to unpickle it.
-scikit-learn>=1.3
+# notebook.
+#
+# scikit-learn is PINNED to an exact version on purpose. A model pickled under
+# one scikit-learn version and loaded under another raises
+# InconsistentVersionWarning and can, in the worst case, produce wrong
+# predictions. The shipped model in models/ was trained on 1.6.1, so this pins
+# 1.6.1 for everyone. If you retrain on a different version, change this line to
+# match the version you trained with, so the app and the model always agree.
+scikit-learn==1.6.1
 joblib>=1.3
 
 # Only needed if the exported model is XGBoost. Safe to leave out otherwise.
@@ -26,9 +32,11 @@ xgboost>=2.0
 # only useful on your own machine.
 #
 # For live capture locally, install Npcap first (see SETUP_WINDOWS.md), then:
-#     pip install nfstream>=6.6.0
-# The app detects it at runtime and adds "Live interface" and "PCAP file" to the
-# capture source dropdown. Without it, simulated traffic and CSV upload work
+#     pip install nfstream>=6.6.0 scapy
+# scapy is needed alongside nfstream on Windows: the app uses it to turn the
+# friendly interface name ("Wi-Fi") into the Npcap device path nfstream
+# requires. The app detects nfstream at runtime and enables Live capture and
+# .pcap / .pcapng upload. Without it, simulated traffic and CSV upload work
 # exactly as they do here.
 
 # Interface enumeration on the Settings page. Optional but makes the interface
