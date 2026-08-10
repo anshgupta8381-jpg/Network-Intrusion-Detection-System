@@ -85,14 +85,22 @@ version so a fresh install matches.
   feature values only approximate real attacks; scoring them would empty the
   radar for no gain.
 - **Live capture** reads real traffic from your own interface through nfstream.
-  It shows genuine flows, but on ordinary Wi-Fi it will read almost everything
-  as BENIGN, because nothing is actually attacking you. That is correct
-  behaviour, not a bug: this kind of tool only sees traffic through the machine
-  it runs on.
-- **Upload** takes either a flow CSV or a raw packet capture. A `.pcap` /
-  `.pcapng` is converted to flow features automatically with nfstream, so there
-  is nothing to export from Wireshark by hand. Attacks only appear if the
-  capture actually contains attack traffic.
+  It shows genuine flows, but what it reads depends entirely on where it runs.
+  On a **home Wi-Fi** it will read almost everything as BENIGN, because nothing
+  is actually attacking you — that is correct behaviour, not a bug. On a network
+  that is **actually under attack** — an organisation being port-scanned, hit
+  with a DoS, or probed — the same live capture would surface those attacks,
+  because now the malicious flows are really passing through. In other words the
+  tool only ever sees traffic through the machine it runs on, so a quiet network
+  looks quiet and a targeted one does not.
+- **Upload** takes either a flow CSV or a raw packet capture. This is the easiest
+  way to analyse traffic you captured elsewhere: open **Wireshark**, capture for
+  a while, and **File -> Save As** a `.pcap` or `.pcapng` (do *not* use
+  Wireshark's "Export as CSV", which lists packets, not the flow features the
+  model needs). Upload that file on the Upload & Analyze page and the app
+  converts it into flow features automatically with nfstream — nothing to
+  prepare by hand. As with live capture, attacks only show up if the capture
+  actually contains attack traffic.
 
 ### Sample data to try
 
